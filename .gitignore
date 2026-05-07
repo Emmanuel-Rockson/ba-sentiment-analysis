@@ -3,3 +3,15 @@ __pycache__/
 *.pyc
 .env
 data/raw_reviews.csv
+
+# Ignore large model files
+models/distilbert/
+models/distilbert_final/
+models/logs/
+
+# Ignore virtual environment
+venv/
+
+# Ignore data files (too large for GitHub)
+data/raw_reviews.csv
+data/cleaned_reviews.csv
