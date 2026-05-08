@@ -12,6 +12,11 @@ import re # re is for cleaning text with regular expressions
 import pickle # pickle loads our saved trained models
 import os # os helps us work with file paths
 
+# Import DistilBERT tokenizer and model from HuggingFace
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+# torch is needed to run the model and process its output
+import torch
+
 # ============================================================
 # PAGE CONFIGURATION
 # ============================================================
@@ -60,9 +65,28 @@ def load_data():
     df['date'] = pd.to_datetime(df['date'])
     return df
 
+@st.cache_resource
+def load_distilbert():
+    # Build the absolute path to the saved DistilBERT folder
+    base_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    model_path = os.path.join(base_dir, 'models', 'distilbert_final')
+
+    # Load the tokenizer we saved in the DistilBERT notebook
+    tokenizer = DistilBertTokenizer.from_pretrained(model_path)
+
+    # Load the trained model we saved in the DistilBERT notebook
+    model = DistilBertForSequenceClassification.from_pretrained(model_path)
+
+    # Set model to evaluation mode
+    # This tells the model we are making predictions not training
+    model.eval()
+
+    return tokenizer, model
+
 # Load data and model
 df = load_data()
 tfidf_model = load_models()
+bert_tokenizer, bert_model = load_distilbert()
 
 # ============================================================
 # DASHBOARD HEADER
@@ -256,19 +280,54 @@ if st.button("Analyse Sentiment"):
             confidence     = round(max(probabilities) * 100, 1)
 
         else:
-            # Placeholder for DistilBERT prediction
-            # We will wire this up properly in the next step
-            st.info("DistilBERT mode coming soon — use Fast mode for now.")
-            prediction  = None
-            confidence  = None
+            # Tokenize the input 
+            inputs = bert_tokenizer(
+                clean_input,
+                return_tensors='pt',
+                truncation=True,
+                padding=True,
+                max_length=256
+            )
 
+            # torch.no_grad() tells PyTorch we are not training
+            # so it does not waste memory calculating gradients
+            with torch.no_grad():
+                outputs = bert_model(**inputs)
+
+            # outputs.logits contains the raw scores for each class
+            # argmax finds the class with the highest score
+            predicted_class = outputs.logits.argmax(dim=1).item()
+
+            # Convert the number back to a sentiment label
+            # 0 = negative, 1 = neutral, 2 = positive
+            label_map  = {0: 'negative', 1: 'neutral', 2: 'positive'}
+            prediction = label_map[predicted_class]
+
+            # Calculate confidence score from the raw logits
+            # softmax converts raw scores into probabilities that add up to 1
+            probabilities = torch.nn.functional.softmax(outputs.logits, dim=1)
+            confidence    = round(probabilities.max().item() * 100, 1)
+
+        
         # Display the result with colour coding
+        # If confidence is below 70% warn the user instead of showing a firm prediction
         if prediction == 'positive':
-            st.success(f"Sentiment: POSITIVE 😊 (Confidence: {confidence}%)")
-        elif prediction == 'negative':
-            st.error(f"Sentiment: NEGATIVE 😞 (Confidence: {confidence}%)")
+            if confidence >= 70:
+                st.success(f"Sentiment: POSITIVE 😊 (Confidence: {confidence}%)")
+            else:
+                st.warning(f"Sentiment: POSITIVE 😊 but low confidence ({confidence}%) — consider human review")
+
+        elif prediction =='negative':
+            if confidence >= 70:
+                st.error(f"Sentiment: NEGATIVE 😞 (Confidence: {confidence}%)")
+            else:
+                st.warning(f"Sentiment: NEGATIVE 😞 but low confidence ({confidence}%) — consider human review")
+
         elif prediction == 'neutral':
-            st.warning(f"Sentiment: NEUTRAL 😐 (Confidence: {confidence}%)")
+            if confidence >= 70:
+                st.warning(f"Sentiment: NEUTRAL 😐 (Confidence: {confidence}%)")
+            else:
+                st.warning(f"Sentiment: NEUTRAL 😐 but low confidence ({confidence}%) — consider human review")
 
 st.markdown("---")
 st.caption("Built by [Your Name] | Data source: Skytrax | Models: VADER, TF-IDF + LR, DistilBERT")
