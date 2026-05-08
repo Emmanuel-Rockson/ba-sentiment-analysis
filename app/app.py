@@ -67,18 +67,15 @@ def load_data():
 
 @st.cache_resource
 def load_distilbert():
-    # Build the absolute path to the saved DistilBERT folder
     base_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model_path = os.path.join(base_dir, 'models', 'distilbert_final')
 
-    # Load the tokenizer we saved in the DistilBERT notebook
+    # Check if DistilBERT model exists before trying to load it
+    if not os.path.exists(model_path):
+        return None, None
+
     tokenizer = DistilBertTokenizer.from_pretrained(model_path)
-
-    # Load the trained model we saved in the DistilBERT notebook
-    model = DistilBertForSequenceClassification.from_pretrained(model_path)
-
-    # Set model to evaluation mode
-    # This tells the model we are making predictions not training
+    model     = DistilBertForSequenceClassification.from_pretrained(model_path)
     model.eval()
 
     return tokenizer, model
@@ -280,7 +277,12 @@ if st.button("Analyse Sentiment"):
             confidence     = round(max(probabilities) * 100, 1)
 
         else:
-            # Tokenize the input 
+            # Check if DistilBERT is available
+            if bert_tokenizer is None or bert_model is None:
+                st.warning("DistilBERT is not available in the live demo due to file size limits. Please use Fast mode. To run DistilBERT clone the repo locally and train the model.")
+                st.stop()
+
+            # Tokenize the input
             inputs = bert_tokenizer(
                 clean_input,
                 return_tensors='pt',
@@ -289,26 +291,15 @@ if st.button("Analyse Sentiment"):
                 max_length=256
             )
 
-            # torch.no_grad() tells PyTorch we are not training
-            # so it does not waste memory calculating gradients
             with torch.no_grad():
                 outputs = bert_model(**inputs)
 
-            # outputs.logits contains the raw scores for each class
-            # argmax finds the class with the highest score
             predicted_class = outputs.logits.argmax(dim=1).item()
-
-            # Convert the number back to a sentiment label
-            # 0 = negative, 1 = neutral, 2 = positive
-            label_map  = {0: 'negative', 1: 'neutral', 2: 'positive'}
-            prediction = label_map[predicted_class]
-
-            # Calculate confidence score from the raw logits
-            # softmax converts raw scores into probabilities that add up to 1
-            probabilities = torch.nn.functional.softmax(outputs.logits, dim=1)
-            confidence    = round(probabilities.max().item() * 100, 1)
-
-        
+            label_map       = {0: 'negative', 1: 'neutral', 2: 'positive'}
+            prediction      = label_map[predicted_class]
+            probabilities   = torch.nn.functional.softmax(outputs.logits, dim=1)
+            confidence      = round(probabilities.max().item() * 100, 1)
+            
         # Display the result with colour coding
         # If confidence is below 70% warn the user instead of showing a firm prediction
         if prediction == 'positive':

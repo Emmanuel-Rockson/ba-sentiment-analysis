@@ -13,5 +13,5 @@ models/logs/
 venv/
 
 # Ignore data files (too large for GitHub)
-data/raw_reviews.csv
-data/cleaned_reviews.csv
+# data/raw_reviews.csv
+# data/cleaned_reviews.csv
