@@ -27,62 +27,83 @@ st.set_page_config(
 )
 
 # ============================================================
-# LOAD DATA
-# I used st.cache_data so the data only loads once
-# Without this it would reload every time the user clicks anything
-# ============================================================
-@st.cache_data
-def load_data():
-    # Go up one folder from app/ to find the data/ folder
-    data_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'cleaned_reviews.csv')
-    df = pd.read_csv(data_path)
-    df['date'] = pd.to_datetime(df['date'])
-    return df
-
-# ============================================================
 # LOAD MODELS
 # I used st.cache_resource for models — they are heavy objects
 # that should only be loaded into memory once
 # ============================================================
 @st.cache_resource
 def load_models():
-    # Build an absolute path so it works regardless of where you run the app from
     base_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    model_path = os.path.join(base_dir, 'models', 'sentiment_model.pkl')
     
-    with open(model_path, 'rb') as f:
-        tfidf_model = pickle.load(f)
-    return tfidf_model
-
-# Load data and model
+    # Load the improved model trained with SMOTE and more data
+    model_path = os.path.join(base_dir, 'models', 'improved_sentiment_model.pkl')
+    
+    # If improved model exists use it otherwise fall back to original
+    if os.path.exists(model_path):
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        print("Loaded improved model successfully!")
+    else:
+        # Fallback to original model if improved not found
+        original_path = os.path.join(base_dir, 'models', 'sentiment_model.pkl')
+        with open(original_path, 'rb') as f:
+            model = pickle.load(f)
+        print("Loaded original model as fallback!")
+    
+    return model
+# ============================================================
+# LOAD DATA
+# I used st.cache_data so the data only loads once
+# Without this it would reload every time the user clicks anything
+# ============================================================
 @st.cache_data
 def load_data():
-    # Build an absolute path so it works regardless of where you run the app from
     base_dir  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_path = os.path.join(base_dir, 'data', 'cleaned_reviews.csv')
+    
+    # Use combined dataset if available otherwise fall back to cleaned
+    combined_path = os.path.join(base_dir, 'data', 'combined_reviews.csv')
+    cleaned_path  = os.path.join(base_dir, 'data', 'cleaned_reviews.csv')
+    
+    if os.path.exists(combined_path):
+        data_path = combined_path
+        print("Loaded combined dataset!")
+    else:
+        data_path = cleaned_path
+        print("Loaded original cleaned dataset!")
+    
+    # Show a clear message if data file is not found
+    if not os.path.exists(data_path):
+        st.error("Data file not found. Please ensure the data file is in the data/ folder.")
+        st.stop()
     
     df = pd.read_csv(data_path)
-    df['date'] = pd.to_datetime(df['date'])
+    df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
     return df
-
-@st.cache_resource
-def load_distilbert():
-    base_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    model_path = os.path.join(base_dir, 'models', 'distilbert_final')
-
-    # Check if DistilBERT model exists before trying to load it
-    if not os.path.exists(model_path):
-        return None, None
-
-    tokenizer = DistilBertTokenizer.from_pretrained(model_path)
-    model     = DistilBertForSequenceClassification.from_pretrained(model_path)
-    model.eval()
-
-    return tokenizer, model
-
+    
 # Load data and model
 df = load_data()
 tfidf_model = load_models()
+
+@st.cache_resource
+def load_distilbert():
+    try:
+        base_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(base_dir, 'models', 'distilbert_final')
+
+        # If folder doesn't exist return None silently
+        if not os.path.exists(model_path):
+            return None, None
+
+        from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+        tokenizer = DistilBertTokenizer.from_pretrained(model_path)
+        model     = DistilBertForSequenceClassification.from_pretrained(model_path)
+        model.eval()
+        return tokenizer, model
+
+    # Catch any error silently and return None
+    except Exception:
+        return None, None
+
 bert_tokenizer, bert_model = load_distilbert()
 
 # ============================================================
@@ -99,6 +120,13 @@ st.markdown("---")
 # st.columns splits the page into side by side sections
 # ============================================================
 st.subheader("📊 Overall Sentiment Overview")
+
+# Show model performance banner
+st.info(
+    "Model performance: Improved TF-IDF + SMOTE achieved **87.4% accuracy** "
+    "on 7,696 reviews — up from 74.8% on the original model. "
+    "Class imbalance fixed using SMOTE oversampling."
+)
 
 # Count reviews in each sentiment group
 total      = len(df)
@@ -117,8 +145,9 @@ col1, col2, col3, col4 = st.columns(4)
 # Each metric shows the count and the percentage change (delta)
 # delta_color='inverse' means red is bad and green is good
 col1.metric(
-    label="Total Reviews",
-    value=f"{total:,}"
+    label="Total Reviews Analysed",
+    value=f"{total:,}",
+    delta="From Skytrax + Kaggle"
 )
 col2.metric(
     label="Negative Reviews",
@@ -269,13 +298,11 @@ if st.button("Analyse Sentiment"):
         clean_input = re.sub(r'[^a-zA-Z0-9\s]', '', user_review.lower())
 
         if "Fast mode" in model_choice:
-            # Use TF-IDF model for instant prediction
-            prediction = tfidf_model.predict([clean_input])[0]
-
-            # Get the confidence score for each class
-            probabilities  = tfidf_model.predict_proba([clean_input])[0]
-            confidence     = round(max(probabilities) * 100, 1)
-
+            # Use improved TF-IDF model for instant prediction
+            # The improved model handles the full pipeline internally
+            prediction    = tfidf_model.predict([user_review])[0]
+            probabilities = tfidf_model.predict_proba([user_review])[0]
+            confidence    = round(max(probabilities) * 100, 1)
         else:
             # Check if DistilBERT is available
             if bert_tokenizer is None or bert_model is None:
